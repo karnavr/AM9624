@@ -64,32 +64,30 @@ def initialize_opinions(N, K):
     S = np.random.uniform(-1, 1, size=(N, K))
     return S
 
-def compute_weights(S):
+def compute_weights(S, allow_negative=True):
     """
-    Compute the weight matrix W based on the opinion matrix S.
+    Compute the weight matrix W based on opinion matrix S.
     
-    For each pair of agents (i, j), the weight is calculated as:
+    For each pair (i, j):
+      If allow_negative is True:
+          w_ij = 1 - (1/K) * sum(|s[i,k] - s[j,k]|)
+      Otherwise (only nonnegative weights):
+          w_ij = 1 - (1/(2*K)) * sum(|s[i,k] - s[j,k]|)
     
-        w_ij = 1 - (1/K) * sum_{k=1}^K | s[i,k] - s[j,k] |
-    
-    (For i == j, the weight can be set to 0.)
-    
-    Parameters:
-      - S (np.ndarray): The opinion matrix of shape (N, K).
-      
-    Returns:
-      - W (np.ndarray): The weight matrix of shape (N, N).
+    For i == j, we set the weight to 0.
     """
     N, K = S.shape
     W = np.zeros((N, N))
-    
     for i in range(N):
         for j in range(N):
             if i != j:
                 avg_diff = np.sum(np.abs(S[i] - S[j])) / K
-                W[i, j] = 1 - avg_diff
+                if allow_negative:
+                    W[i, j] = 1 - avg_diff
+                else:
+                    W[i, j] = 1 - (avg_diff / 2)
             else:
-                W[i, j] = 0  # Optionally, self-weight can be 0.
+                W[i, j] = 0
     return W
 
 
@@ -133,18 +131,15 @@ def update_state_for_agent(i, S, W, graph):
         # Ensure the updated opinion stays within [-1, 1]
         S[i, k] = np.clip(S[i, k], -1, 1)
 
-def update_weights_for_agent(i, S, W, graph):
+def update_weights_for_agent(i, S, W, graph, allow_negative=True):
     """
-    Update the weights for the ties emanating from agent i.
+    Update the weights for agent i's ties.
     
-    For each neighbor j of agent i, compute:
-       w_{ij} = 1 - (1/K) * Σ_{k=1}^{K} | s_{ik} - s_{jk} |
-    
-    Parameters:
-      - i: index of the focal agent
-      - S: opinion matrix of shape (N, K)
-      - W: weight matrix of shape (N, N)
-      - graph: the NetworkX graph (neighbors of i are those with an edge from i)
+    For each neighbor j of agent i, update:
+      If allow_negative is True:
+          w_ij = 1 - (1/K) * sum(|s[i,k] - s[j,k]|)
+      Otherwise:
+          w_ij = 1 - (1/(2*K)) * sum(|s[i,k] - s[j,k]|)
     """
     neighbors = list(graph.neighbors(i))
     if not neighbors:
@@ -152,9 +147,12 @@ def update_weights_for_agent(i, S, W, graph):
     K = S.shape[1]
     for j in neighbors:
         avg_diff = np.sum(np.abs(S[i] - S[j])) / K
-        W[i, j] = 1 - avg_diff
+        if allow_negative:
+            W[i, j] = 1 - avg_diff
+        else:
+            W[i, j] = 1 - (avg_diff / 2)
 
-def run_simulation(graph, S, W, num_iterations):
+def run_simulation(graph, S, W, num_iterations, allow_negative=True):
     """
     Run the simulation asynchronously.
     
@@ -185,7 +183,7 @@ def run_simulation(graph, S, W, num_iterations):
         if random.random() < 0.5:
             update_state_for_agent(i, S, W, graph)
         else:
-            update_weights_for_agent(i, S, W, graph)
+            update_weights_for_agent(i, S, W, graph, allow_negative=allow_negative)
         
         # Record polarization every N steps (i.e. once per iteration)
         if (t + 1) % N == 0:
