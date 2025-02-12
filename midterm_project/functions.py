@@ -152,20 +152,30 @@ def update_weights_for_agent(i, S, W, graph, allow_negative=True):
         else:
             W[i, j] = 1 - (avg_diff / 2)
 
-def run_simulation(graph, S, W, num_iterations, allow_negative=True):
+def run_simulation(graph, S, W, num_iterations, allow_negative=True,
+                   tie_addition_iter=None, p_random_new=None):
     """
-    Run the simulation asynchronously.
+    Run the asynchronous simulation.
     
-    The total number of time steps is num_iterations * N (where N is the number
-    of agents). In each time step, one agent is chosen at random. Then, with 
-    probability 0.5, either its opinion state or its weights (for its ties) are updated.
+    The total number of time steps is num_iterations * N (N = number of agents).
+    In each time step, one agent is chosen at random; then, with 50% chance, 
+    either its opinion state is updated or its outgoing weights are updated.
+    
+    Additionally, if tie_addition_iter is specified (an integer representing the iteration
+    number after which to add new random ties) and p_random_new is provided, then at that
+    iteration the function adds new random ties to the graph.
+    
+    We record the polarization once per iteration (i.e. every N steps).
     
     Parameters:
       - graph: the NetworkX graph (the static access network)
       - S: opinion matrix (N x K)
       - W: weight matrix (N x N)
       - num_iterations: number of iterations (each iteration corresponds to N time steps)
-    
+      - allow_negative: Boolean flag for weight computation (default: True)
+      - tie_addition_iter: (Optional) iteration number (1-indexed) after which to add new ties.
+      - p_random_new: (Optional) probability for adding a new tie when tie addition occurs.
+      
     Returns:
       - polarization_history: list of polarization values recorded once per iteration.
       - S: final opinion matrix.
@@ -179,19 +189,27 @@ def run_simulation(graph, S, W, num_iterations, allow_negative=True):
         # Pick an agent at random (with replacement)
         i = random.choice(list(graph.nodes()))
         
-        # Randomly choose to update state or weight (each with probability 0.5)
+        # With probability 0.5, update state; otherwise, update weights.
         if random.random() < 0.5:
             update_state_for_agent(i, S, W, graph)
         else:
             update_weights_for_agent(i, S, W, graph, allow_negative=allow_negative)
         
-        # Record polarization every N steps (i.e. once per iteration)
+        # Check if we should add random ties at the end of this iteration.
         if (t + 1) % N == 0:
+            current_iter = (t + 1) // N
+            # If tie_addition_iter is specified and matches current iteration, add new ties.
+            if tie_addition_iter is not None and current_iter == tie_addition_iter:
+                # p_random_new must be provided in this case.
+                if p_random_new is not None:
+                    add_random_ties_to_graph(graph, p_random_new)
+            # Record polarization at the end of the iteration.
             P_t = compute_polarization(S)
             polarization_history.append(P_t)
     
     return polarization_history, S, W
 
+### HELPER FUNCTIONS
 
 def compute_polarization(S):
     """
@@ -222,6 +240,23 @@ def compute_polarization(S):
     # Polarization is the variance of these distances.
     P_t = np.mean((distances - mean_distance) ** 2)
     return P_t
+
+def add_random_ties_to_graph(graph, p_random):
+    """
+    Add random long-range ties to an existing graph.
+    
+    For every pair of nodes (i, j) that are not already connected, add an edge with
+    probability p_random.
+    
+    Parameters:
+      - graph: a NetworkX graph object (modified in place)
+      - p_random (float): probability of adding a tie between any pair
+    """
+    nodes = list(graph.nodes())
+    for i in nodes:
+        for j in nodes:
+            if i != j and not graph.has_edge(i, j) and random.random() < p_random:
+                graph.add_edge(i, j)
 
 
 ### PLOTTING
