@@ -6,11 +6,11 @@ import random
 from networkx.algorithms import community
 
 
-### GENEERATING/INITIALIZING NETWORKS
+### GENERATING/INITIALIZING NETWORKS
 
 def initialize_network(num_caves, cave_size, add_random_ties, p_random):
     """
-    Create a caveman network (disconnected or with extra random ties)
+    Create a caveman network (disconnected caves or with extra random ties)
     
     Parameters:
       - num_caves: number of clusters (or caves/groups)
@@ -48,16 +48,182 @@ def initialize_network(num_caves, cave_size, add_random_ties, p_random):
                     
     return G
 
+def initialize_opinions(N, K):
+    """
+    Initialize the opinion matrix S for N agents and K opinion dimensions.
+    
+    Each entry is drawn uniformly at random from [-1, 1].
+    
+    Parameters:
+      - N (int): Number of agents.
+      - K (int): Number of opinion dimensions.
+    
+    Returns:
+      - S (np.ndarray): An (N x K) array of opinions.
+    """
+    S = np.random.uniform(-1, 1, size=(N, K))
+    return S
 
-
-
-
-
+def compute_weights(S):
+    """
+    Compute the weight matrix W based on the opinion matrix S.
+    
+    For each pair of agents (i, j), the weight is calculated as:
+    
+        w_ij = 1 - (1/K) * sum_{k=1}^K | s[i,k] - s[j,k] |
+    
+    (For i == j, the weight can be set to 0.)
+    
+    Parameters:
+      - S (np.ndarray): The opinion matrix of shape (N, K).
+      
+    Returns:
+      - W (np.ndarray): The weight matrix of shape (N, N).
+    """
+    N, K = S.shape
+    W = np.zeros((N, N))
+    
+    for i in range(N):
+        for j in range(N):
+            if i != j:
+                avg_diff = np.sum(np.abs(S[i] - S[j])) / K
+                W[i, j] = 1 - avg_diff
+            else:
+                W[i, j] = 0  # Optionally, self-weight can be 0.
+    return W
 
 
 
 ### DYNAMICS
 
+def update_state_for_agent(i, S, W, graph):
+    """
+    Update the opinion state of agent i asynchronously.
+    
+    The rule is:
+      Δs_{ik} = (1/(2 * N_i)) * Σ_{j in neighbors} w_{ij} * (s_{jk} - s_{ik})
+      then for each dimension k:
+         if s_{ik} > 0: s_{ik} <- s_{ik} + Δs_{ik}*(1 - s_{ik})
+         else:         s_{ik} <- s_{ik} + Δs_{ik}*(1 + s_{ik})
+    
+    Parameters:
+      - i: index of the focal agent
+      - S: opinion matrix of shape (N, K)
+      - W: weight matrix of shape (N, N)
+      - graph: the NetworkX graph (used to get the neighbors of i)
+    """
+    neighbors = list(graph.neighbors(i))
+    if not neighbors:
+        return  # No update if agent i has no neighbors.
+    N_i = len(neighbors)
+    K = S.shape[1]
+    
+    # Compute the influence delta (a vector of length K)
+    delta = np.zeros(K)
+    for j in neighbors:
+        delta += W[i, j] * (S[j] - S[i])
+    delta /= (2 * N_i)
+    
+    # Update each opinion component with smoothing:
+    for k in range(K):
+        if S[i, k] > 0:
+            S[i, k] += delta[k] * (1 - S[i, k])
+        else:
+            S[i, k] += delta[k] * (1 + S[i, k])
+        # Ensure the updated opinion stays within [-1, 1]
+        S[i, k] = np.clip(S[i, k], -1, 1)
+
+def update_weights_for_agent(i, S, W, graph):
+    """
+    Update the weights for the ties emanating from agent i.
+    
+    For each neighbor j of agent i, compute:
+       w_{ij} = 1 - (1/K) * Σ_{k=1}^{K} | s_{ik} - s_{jk} |
+    
+    Parameters:
+      - i: index of the focal agent
+      - S: opinion matrix of shape (N, K)
+      - W: weight matrix of shape (N, N)
+      - graph: the NetworkX graph (neighbors of i are those with an edge from i)
+    """
+    neighbors = list(graph.neighbors(i))
+    if not neighbors:
+        return
+    K = S.shape[1]
+    for j in neighbors:
+        avg_diff = np.sum(np.abs(S[i] - S[j])) / K
+        W[i, j] = 1 - avg_diff
+
+def run_simulation(graph, S, W, num_iterations):
+    """
+    Run the simulation asynchronously.
+    
+    The total number of time steps is num_iterations * N (where N is the number
+    of agents). In each time step, one agent is chosen at random. Then, with 
+    probability 0.5, either its opinion state or its weights (for its ties) are updated.
+    
+    Parameters:
+      - graph: the NetworkX graph (the static access network)
+      - S: opinion matrix (N x K)
+      - W: weight matrix (N x N)
+      - num_iterations: number of iterations (each iteration corresponds to N time steps)
+    
+    Returns:
+      - polarization_history: list of polarization values recorded once per iteration.
+      - S: final opinion matrix.
+      - W: final weight matrix.
+    """
+    N = graph.number_of_nodes()
+    total_steps = num_iterations * N
+    polarization_history = []
+    
+    for t in range(total_steps):
+        # Pick an agent at random (with replacement)
+        i = random.choice(list(graph.nodes()))
+        
+        # Randomly choose to update state or weight (each with probability 0.5)
+        if random.random() < 0.5:
+            update_state_for_agent(i, S, W, graph)
+        else:
+            update_weights_for_agent(i, S, W, graph)
+        
+        # Record polarization every N steps (i.e. once per iteration)
+        if (t + 1) % N == 0:
+            P_t = compute_polarization(S)
+            polarization_history.append(P_t)
+    
+    return polarization_history, S, W
+
+
+def compute_polarization(S):
+    """
+    Compute the polarization measure P_t at a given time t, given the opinion matrix S.
+    
+    S is a numpy array of shape (N, K), where N is the number of agents and 
+    K is the number of opinion dimensions.
+    
+    For every pair of distinct agents (i, j), we compute:
+        d_ij = (1/K) * sum(|S[i, :] - S[j, :]|)
+    and then compute the variance of all these d_ij values.
+    
+    Returns:
+      - P_t (float): The polarization measure.
+    """
+    N, K = S.shape
+    distances = []
+    
+    # Loop over all unique pairs (i, j) with i < j to avoid redundancy
+    for i in range(N):
+        for j in range(i + 1, N):
+            # Compute the average absolute difference between opinions of i and j
+            d_ij = np.sum(np.abs(S[i] - S[j])) / K
+            distances.append(d_ij)
+    
+    distances = np.array(distances)
+    mean_distance = np.mean(distances)
+    # Polarization is the variance of these distances.
+    P_t = np.mean((distances - mean_distance) ** 2)
+    return P_t
 
 
 ### PLOTTING
