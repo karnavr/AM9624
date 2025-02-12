@@ -8,10 +8,55 @@ from networkx.algorithms import community
 
 ### GENEERATING/INITIALIZING NETWORKS
 
+def initialize_network(num_caves, cave_size, add_random_ties, p_random):
+    """
+    Create a caveman network (disconnected or with extra random ties)
+    
+    Parameters:
+      - num_caves: number of clusters (or caves/groups)
+      - cave_size: number of nodes per cave
+      - add_random_ties: boolean, if True then add random long-range ties
+      - p_random: probability for adding a random tie between any pair 
+      
+    Returns:
+      - G: a NetworkX graph object with the caveman structure (and random ties if requested)
+    """
+
+    # NOTE: we can also simply use nx.connected_caveman_graph(num_caves, cave_size), which would create a 
+    # network that such that there is at least one edge connecting each cave to it's neighbors. This is not 
+    # necessarily the case for our implementation below, which is in-line with the Flache and Macy model. 
+
+    # Create a list of complete subgraphs one for each cave.
+    subgraphs = [nx.caveman_graph(1, cave_size) for _ in range(num_caves)]
+    
+    # Combine these complete subgraphs into one graph.
+    # The function nx.disjoint_union_all returns a graph that is the disjoint union of all the subgraphs.
+    # This means the resulting graph G has each cave as an isolated component.
+    G = nx.disjoint_union_all(subgraphs)
+    
+    # Optionally, add random long-range ties.
+    if add_random_ties:
+        
+        nodes = list(G.nodes())
+        
+        # Iterate over all pairs of nodes
+        for i in nodes:
+            for j in nodes:
+                # We add a tie if i and j are not already connected (could perhaps also check that i and j belong to different caves)
+                if i != j and not G.has_edge(i, j) and random.random() < p_random:
+                    G.add_edge(i, j)
+                    
+    return G
+
+
+
+
+
+
+
 
 
 ### DYNAMICS
-
 
 
 
