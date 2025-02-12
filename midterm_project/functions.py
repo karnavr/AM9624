@@ -13,25 +13,24 @@ def initialize_network(num_caves, cave_size, add_random_ties, p_random):
     Create a caveman network (disconnected caves or with extra random ties)
     
     Parameters:
-      - num_caves: number of clusters (or caves/groups)
-      - cave_size: number of nodes per cave
-      - add_random_ties: boolean, if True then add random long-range ties
-      - p_random: probability for adding a random tie between any pair 
+      - num_caves: number of clusters/groups/caves
+      - cave_size: number of agents/nodes per cave
+      - add_random_ties: boolean, if True then add random long-range ties with probability p_random
+      - p_random: probability for adding a random tie between any pair of agents
       
     Returns:
       - G: a NetworkX graph object with the caveman structure (and random ties if requested)
     """
 
     # NOTE: we can also simply use nx.connected_caveman_graph(num_caves, cave_size), which would create a 
-    # network that such that there is at least one edge connecting each cave to it's neighbors. This is not 
-    # necessarily the case for our implementation below, which is in-line with the Flache and Macy model. 
+    # network that such that there is at least one edge connecting each cave to it's neighbors. The Flache and
+    # Macy model creates random ties by iterating over all pairs of agents and adding a tie with probability p_random.
+    # This can lead to some caves being isolated. We implement this below.
 
     # Create a list of complete subgraphs one for each cave.
     subgraphs = [nx.caveman_graph(1, cave_size) for _ in range(num_caves)]
     
     # Combine these complete subgraphs into one graph.
-    # The function nx.disjoint_union_all returns a graph that is the disjoint union of all the subgraphs.
-    # This means the resulting graph G has each cave as an isolated component.
     G = nx.disjoint_union_all(subgraphs)
     
     # Optionally, add random long-range ties.
@@ -43,7 +42,7 @@ def initialize_network(num_caves, cave_size, add_random_ties, p_random):
         for i in nodes:
             for j in nodes:
                 # We add a tie if i and j are not already connected (could perhaps also check that i and j belong to different caves)
-                if i != j and not G.has_edge(i, j) and random.random() < p_random:
+                if (i != j) and not (G.has_edge(i, j)) and (random.random() < p_random):
                     G.add_edge(i, j)
                     
     return G
@@ -51,7 +50,6 @@ def initialize_network(num_caves, cave_size, add_random_ties, p_random):
 def initialize_opinions(N, K):
     """
     Initialize the opinion matrix S for N agents and K opinion dimensions.
-    
     Each entry is drawn uniformly at random from [-1, 1].
     
     Parameters:
@@ -66,18 +64,27 @@ def initialize_opinions(N, K):
 
 def compute_weights(S, allow_negative=True):
     """
-    Compute the weight matrix W based on opinion matrix S.
+    Compute the weight matrix W based on opinion matrix S. To be used when initializing
+    the network and setting the initial weights.
+
+    Parameters:
+      - S (np.ndarray): opinion matrix of shape (N, K)
+      - allow_negative (bool): if True then allow negative weights
+
+    Returns:
+      - W (np.ndarray): weight matrix of shape (N, N)
     
     For each pair (i, j):
       If allow_negative is True:
-          w_ij = 1 - (1/K) * sum(|s[i,k] - s[j,k]|)
+          w_ij = 1 - (1/K) * sum(|s[i,k] - s[j,k]|) (eq. 1 Flache and Macy)
       Otherwise (only nonnegative weights):
-          w_ij = 1 - (1/(2*K)) * sum(|s[i,k] - s[j,k]|)
+          w_ij = 1 - (1/(2*K)) * sum(|s[i,k] - s[j,k]|) (eq. 1a Flache and Macy)
     
     For i == j, we set the weight to 0.
     """
     N, K = S.shape
     W = np.zeros((N, N))
+
     for i in range(N):
         for j in range(N):
             if i != j:
@@ -91,7 +98,6 @@ def compute_weights(S, allow_negative=True):
     return W
 
 
-
 ### DYNAMICS
 
 def update_state_for_agent(i, S, W, graph):
@@ -99,24 +105,26 @@ def update_state_for_agent(i, S, W, graph):
     Update the opinion state of agent i asynchronously.
     
     The rule is:
-      Δs_{ik} = (1/(2 * N_i)) * Σ_{j in neighbors} w_{ij} * (s_{jk} - s_{ik})
+      \Delta s_{ik} = (1/(2 * N_i)) * sum_{j in neighbors} w_{ij} * (s_{jk} - s_{ik})
       then for each dimension k:
-         if s_{ik} > 0: s_{ik} <- s_{ik} + Δs_{ik}*(1 - s_{ik})
-         else:         s_{ik} <- s_{ik} + Δs_{ik}*(1 + s_{ik})
+         if s_{ik} > 0: s_{ik} <- s_{ik} + \Delta s_{ik}*(1 - s_{ik})
+         else:         s_{ik} <- s_{ik} + \Delta s_{ik}*(1 + s_{ik})
     
     Parameters:
-      - i: index of the focal agent
-      - S: opinion matrix of shape (N, K)
-      - W: weight matrix of shape (N, N)
-      - graph: the NetworkX graph (used to get the neighbors of i)
+      - i (int): index of the agent to be updated
+      - S (np.ndarray): opinion matrix of shape (N, K)
+      - W (np.ndarray): weight matrix of shape (N, N)
+      - graph (nx.Graph): the NetworkX graph (used to get the neighbors of i)
     """
     neighbors = list(graph.neighbors(i))
-    if not neighbors:
+
+    if len(neighbors) == 0:
         return  # No update if agent i has no neighbors.
+    
     N_i = len(neighbors)
     K = S.shape[1]
     
-    # Compute the influence delta (a vector of length K)
+    # Compute the change in opinion / influence delta (as a vector of length K)
     delta = np.zeros(K)
     for j in neighbors:
         delta += W[i, j] * (S[j] - S[i])
@@ -128,12 +136,21 @@ def update_state_for_agent(i, S, W, graph):
             S[i, k] += delta[k] * (1 - S[i, k])
         else:
             S[i, k] += delta[k] * (1 + S[i, k])
+
         # Ensure the updated opinion stays within [-1, 1]
         S[i, k] = np.clip(S[i, k], -1, 1)
 
 def update_weights_for_agent(i, S, W, graph, allow_negative=True):
     """
-    Update the weights for agent i's ties.
+    Update the weights for agent i's ties. 
+    To be used when updating the state of the network.
+
+    Parameters:
+      - i (int): index of the agent to update the weights for
+      - S (np.ndarray): opinion matrix of shape (N, K)
+      - W (np.ndarray): weight matrix of shape (N, N)
+      - graph (nx.Graph): the NetworkX graph (used to get the neighbors of i)
+      - allow_negative (bool): if True then allow negative weights
     
     For each neighbor j of agent i, update:
       If allow_negative is True:
@@ -142,8 +159,10 @@ def update_weights_for_agent(i, S, W, graph, allow_negative=True):
           w_ij = 1 - (1/(2*K)) * sum(|s[i,k] - s[j,k]|)
     """
     neighbors = list(graph.neighbors(i))
-    if not neighbors:
-        return
+
+    if len(neighbors) == 0:
+        return  # No update if agent i has no neighbors.
+    
     K = S.shape[1]
     for j in neighbors:
         avg_diff = np.sum(np.abs(S[i] - S[j])) / K
@@ -157,9 +176,9 @@ def run_simulation(graph, S, W, num_iterations, allow_negative=True,
     """
     Run the asynchronous simulation.
     
-    The total number of time steps is num_iterations * N (N = number of agents).
     In each time step, one agent is chosen at random; then, with 50% chance, 
     either its opinion state is updated or its outgoing weights are updated.
+    The total number of time steps is num_iterations * N (N = number of agents).
     
     Additionally, if tie_addition_iter is specified (an integer representing the iteration
     number after which to add new random ties) and p_random_new is provided, then at that
@@ -168,12 +187,12 @@ def run_simulation(graph, S, W, num_iterations, allow_negative=True,
     We record the polarization once per iteration (i.e. every N steps).
     
     Parameters:
-      - graph: the NetworkX graph (the static access network)
+      - graph: the NetworkX graph
       - S: opinion matrix (N x K)
       - W: weight matrix (N x N)
       - num_iterations: number of iterations (each iteration corresponds to N time steps)
       - allow_negative: Boolean flag for weight computation (default: True)
-      - tie_addition_iter: (Optional) iteration number (1-indexed) after which to add new ties.
+      - tie_addition_iter: (Optional) iteration number after which to add new ties.
       - p_random_new: (Optional) probability for adding a new tie when tie addition occurs.
       
     Returns:
@@ -186,7 +205,8 @@ def run_simulation(graph, S, W, num_iterations, allow_negative=True,
     polarization_history = []
     
     for t in range(total_steps):
-        # Pick an agent at random (with replacement)
+
+        # Pick an agent at random (with replacement, so no need to remove from list)
         i = random.choice(list(graph.nodes()))
         
         # With probability 0.5, update state; otherwise, update weights.
@@ -197,17 +217,24 @@ def run_simulation(graph, S, W, num_iterations, allow_negative=True,
         
         # Check if we should add random ties at the end of this iteration.
         if (t + 1) % N == 0:
+
             current_iter = (t + 1) // N
+
             # If tie_addition_iter is specified and matches current iteration, add new ties.
-            if tie_addition_iter is not None and current_iter == tie_addition_iter:
+            if (tie_addition_iter is not None) and (current_iter == tie_addition_iter):
+
                 # p_random_new must be provided in this case.
                 if p_random_new is not None:
                     add_random_ties_to_graph(graph, p_random_new)
+                else:
+                    raise ValueError("p_random_new must be provided if tie_addition_iter is specified.")
+
             # Record polarization at the end of the iteration.
             P_t = compute_polarization(S)
             polarization_history.append(P_t)
     
     return polarization_history, S, W
+
 
 ### HELPER FUNCTIONS
 
@@ -215,12 +242,12 @@ def compute_polarization(S):
     """
     Compute the polarization measure P_t at a given time t, given the opinion matrix S.
     
-    S is a numpy array of shape (N, K), where N is the number of agents and 
-    K is the number of opinion dimensions.
-    
     For every pair of distinct agents (i, j), we compute:
         d_ij = (1/K) * sum(|S[i, :] - S[j, :]|)
     and then compute the variance of all these d_ij values.
+    
+    Parameters:
+      - S (np.ndarray): opinion matrix of shape (N, K)
     
     Returns:
       - P_t (float): The polarization measure.
@@ -228,17 +255,21 @@ def compute_polarization(S):
     N, K = S.shape
     distances = []
     
-    # Loop over all unique pairs (i, j) with i < j to avoid redundancy
+    # Loop over all unique pairs (i, j) with i < j to avoid double-counting pairs
     for i in range(N):
-        for j in range(i + 1, N):
+        for j in range(i + 1, N): # ensure j > i to avoid redundancy
+
             # Compute the average absolute difference between opinions of i and j
             d_ij = np.sum(np.abs(S[i] - S[j])) / K
             distances.append(d_ij)
     
     distances = np.array(distances)
     mean_distance = np.mean(distances)
+
     # Polarization is the variance of these distances.
-    P_t = np.mean((distances - mean_distance) ** 2)
+    # P_t = np.mean((distances - mean_distance) ** 2)
+    P_t = np.sum((distances - mean_distance) ** 2) / (N * (N - 1))
+
     return P_t
 
 def add_random_ties_to_graph(graph, p_random):
@@ -255,7 +286,7 @@ def add_random_ties_to_graph(graph, p_random):
     nodes = list(graph.nodes())
     for i in nodes:
         for j in nodes:
-            if i != j and not graph.has_edge(i, j) and random.random() < p_random:
+            if (i != j) and (not graph.has_edge(i, j)) and (random.random() < p_random):
                 graph.add_edge(i, j)
 
 
@@ -296,7 +327,6 @@ def caveman_layout(G, spacing=3):
             pos[node] = (sub_pos[node][0] + shift_x, sub_pos[node][1])
 
     return pos, groups
-
 
 def caveman_layout_positions(G, group_spacing=6, node_spacing=1.5, seed=42):
     """
