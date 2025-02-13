@@ -62,6 +62,62 @@ def initialize_opinions(N, K):
     S = np.random.uniform(-1, 1, size=(N, K))
     return S
 
+def initialize_opinions_Lee(N, K, NS, cave_size):
+    """
+    Initialize the opinion matrix S for the Lee model.
+    
+    A fraction NS of the K opinion dimensions (H = int(NS * K)) will be segregated.
+    We assign each node to a cave based on its index (assuming nodes are ordered by cave):
+        cave_number = i // cave_size.
+    Then, we assign each cave alternately to group 0 and group 1 (group = cave_number mod 2).
+    
+    For segregated dimensions (first H dimensions):
+      - If the node belongs to group 0, sample from U(-1, 0).
+      - If the node belongs to group 1, sample from U(0, 1).
+    For the remaining (K - H) non-segregated dimensions, sample uniformly from U(-1, 1).
+    
+    Parameters:
+      - N (int): Total number of agents.
+      - K (int): Number of opinion dimensions.
+      - NS (float): Fraction (0 <= NS <= 1) of dimensions that are segregated.
+      - cave_size (int): Number of nodes per cave (assumes nodes are ordered by cave).
+    
+    Returns:
+      - S (np.ndarray): An (N x K) opinion matrix.
+      - groups (np.ndarray): A vector of length N with the group assignment (0 or 1) for each node.
+    """
+    S = np.zeros((N, K))
+    groups = np.zeros(N, dtype=int)
+    
+    # Determine the number of segregated dimensions.
+    H = int(round(NS * K))
+    
+    # Iterate over all nodes.
+    for i in range(N):
+
+        # Determine the cave membership using integer division. 
+        # (relies on nodes being ordered by cave, which is the case for the caveman network created using a disjoint union of complete graphs)
+        cave_num = i // cave_size
+
+        # Assign groups alternately based on cave number.
+        group = cave_num % 2
+        groups[i] = group
+        
+        for k in range(K):
+            if k < H:
+                # Segregated dimension: assign based on group membership.
+                print(f"Segregated dimension: {k}")
+                if group == 0:
+                    S[i, k] = np.random.uniform(-1, 0)
+                else:
+                    S[i, k] = np.random.uniform(0, 1)
+            else:
+                # Non-segregated dimension: assign uniformly from [-1, 1].
+                S[i, k] = np.random.uniform(-1, 1)
+                print(f"Non-segregated dimension: {k}")
+    
+    return S
+
 def compute_weights(S, allow_negative=True):
     """
     Compute the weight matrix W based on opinion matrix S. To be used when initializing
@@ -96,7 +152,6 @@ def compute_weights(S, allow_negative=True):
             else:
                 W[i, j] = 0
     return W
-
 
 ### DYNAMICS
 
@@ -140,6 +195,59 @@ def update_state_for_agent(i, S, W, graph):
         # Ensure the updated opinion stays within [-1, 1]
         S[i, k] = np.clip(S[i, k], -1, 1)
 
+def update_state_for_agent_Lee(i, S, W, graph, T):
+    """
+    Update the opinion state of agent i asynchronously using structural embeddedness.
+    
+    This function is similar to the original update_state_for_agent, but now for each 
+    neighbor j we use the pre-computed tie activation probability T[i,j] to decide 
+    whether neighbor j's influence is active.
+    
+    In particular, for each neighbor j, with probability T[i,j] we include:
+         w_{ij}*(S[j] - S[i])
+    in the influence sum; otherwise, that neighbor's influence is omitted.
+    
+    Then, as before, we compute:
+        \Delta s_{ik} = (1/(2 * N_i)) * sum_{j in active neighbors} w_{ij}*(s_{jk} - s_{ik})
+    and update each component with smoothing.
+    
+    Parameters:
+      - i: index of the focal agent.
+      - S: opinion matrix (N x K).
+      - W: weight matrix (N x N).
+      - graph: the NetworkX graph.
+      - T: the pre-computed tie activation probability matrix (N x N).
+    """
+    neighbors = list(graph.neighbors(i))
+    K = S.shape[1]
+
+    if len(neighbors) == 0:
+        return  # No update if agent i has no neighbors.
+    
+    active_delta_sum = np.zeros(K)
+    active_neighbors_count = 0  # Count the number of neighbors whose tie is active
+
+    for j in neighbors:
+
+        # For each neighbor j, include its influence only if the tie is activated.
+        if random.random() < T[i, j]:
+            active_delta_sum += W[i, j] * (S[j] - S[i])
+            active_neighbors_count += 1
+
+    if active_neighbors_count == 0:
+        return  # No update to S[i] if no neighbor is activated.
+    delta = active_delta_sum / (2 * active_neighbors_count)
+    
+    # Update each opinion dimension with smoothing:
+    for k in range(K):
+        if S[i, k] > 0:
+            S[i, k] += delta[k] * (1 - S[i, k])
+        else:
+            S[i, k] += delta[k] * (1 + S[i, k])
+
+        # Ensure the updated opinion stays within [-1, 1]
+        S[i, k] = np.clip(S[i, k], -1, 1)
+
 def update_weights_for_agent(i, S, W, graph, allow_negative=True):
     """
     Update the weights for agent i's ties. 
@@ -171,8 +279,7 @@ def update_weights_for_agent(i, S, W, graph, allow_negative=True):
         else:
             W[i, j] = 1 - (avg_diff / 2)
 
-def run_simulation(graph, S, W, num_iterations, allow_negative=True,
-                   tie_addition_iter=None, p_random_new=None):
+def run_simulation(graph, S, W, num_iterations, allow_negative=True, tie_addition_iter=None, p_random_new=None):
     """
     Run the asynchronous simulation.
     
@@ -215,7 +322,7 @@ def run_simulation(graph, S, W, num_iterations, allow_negative=True,
         else:
             update_weights_for_agent(i, S, W, graph, allow_negative=allow_negative)
         
-        # Check if we should add random ties at the end of this iteration.
+        # At the end of each iteration (i.e. every N time steps)
         if (t + 1) % N == 0:
 
             current_iter = (t + 1) // N
@@ -230,6 +337,71 @@ def run_simulation(graph, S, W, num_iterations, allow_negative=True,
                     raise ValueError("p_random_new must be provided if tie_addition_iter is specified.")
 
             # Record polarization at the end of the iteration.
+            P_t = compute_polarization(S)
+            polarization_history.append(P_t)
+    
+    return polarization_history, S, W
+
+def run_simulation_Lee(graph, S, W, num_iterations, SE, allow_negative=True, tie_addition_iter=None, p_random_new=None):
+    """
+    Run the asynchronous simulation for the Lee model.
+    
+    In each time step, one agent is chosen at random; then, with 50% chance, either:
+      - Its opinion state is updated using the new update function that incorporates 
+        structural embeddedness (SE) via the pre-computed tie activation matrix T, 
+      - OR its outgoing weights are updated.
+    
+    The total number of time steps is num_iterations * N (where N is the number of agents).
+    
+    Additionally, if tie_addition_iter is specified (an iteration after which to add new 
+    random ties) and p_random_new is provided, then new random ties are added to the graph 
+    at that iteration.
+    
+    Parameters:
+      - graph: the NetworkX graph (static access network).
+      - S: opinion matrix (N x K), assumed to be produced using initialize_opinions_Lee.
+      - W: weight matrix (N x N).
+      - num_iterations: number of iterations (each iteration corresponds to N time steps).
+      - SE: Structural Embeddedness parameter (0 <= SE <= 1).
+      - allow_negative: Boolean flag for weight computation (default: True).
+      - tie_addition_iter: (Optional) iteration number after which to add new ties.
+      - p_random_new: (Optional) probability for adding a new tie when tie addition occurs.
+      
+    Returns:
+      - polarization_history: list of polarization values recorded once per iteration.
+      - S: final opinion matrix.
+      - W: final weight matrix.
+    """
+    # Compute tie activation probability matrix T once at the beginning.
+    T = compute_tie_strength(graph, SE)
+    
+    N = graph.number_of_nodes()
+    total_steps = num_iterations * N
+    polarization_history = []
+    
+    for t in range(total_steps):
+        # Pick an agent at random (with replacement)
+        i = random.choice(list(graph.nodes()))
+        
+        # With probability 0.5, update the opinion state using the Lee version; otherwise update weights.
+        if random.random() < 0.5:
+            update_state_for_agent_Lee(i, S, W, graph, T)
+        else:
+            update_weights_for_agent(i, S, W, graph, allow_negative=allow_negative)
+        
+        # At the end of each iteration (i.e. every N time steps)
+        if (t + 1) % N == 0:
+            current_iter = (t + 1) // N
+            
+            # Optionally, add new random ties if specified.
+            if (tie_addition_iter is not None) and (current_iter == tie_addition_iter):
+                if p_random_new is not None:
+                    add_random_ties_to_graph(graph, p_random_new)
+                    T = compute_tie_strength(graph, SE)  # Re-compute T since the network structure has changed.
+                else:
+                    raise ValueError("p_random_new must be provided if tie_addition_iter is specified.")
+            
+            # Record polarization at the end of this iteration.
             P_t = compute_polarization(S)
             polarization_history.append(P_t)
     
@@ -289,6 +461,66 @@ def add_random_ties_to_graph(graph, p_random):
             if (i != j) and (not graph.has_edge(i, j)) and (random.random() < p_random):
                 graph.add_edge(i, j)
 
+def compute_topological_overlap(graph, i, j):
+    """
+    Compute the topological overlap O_ij between nodes i and j.
+    
+    O_ij = n_ij / ((k_i - 1) + (k_j - 1) - n_ij)
+    where:
+      - n_ij is the number of common neighbors of i and j,
+      - k_i and k_j are the degrees of i and j, respectively.
+      
+    If the denominator is zero (which may happen for very low-degree nodes),
+    we define O_ij = 0.
+    
+    Parameters:
+      - graph: a NetworkX graph
+      - i, j: node identifiers
+      
+    Returns:
+      - O_ij (float): the topological overlap between nodes i and j.
+    """
+    # Get common neighbors between i and j
+    common_neighbors = list(nx.common_neighbors(graph, i, j))
+
+    # components of the O_ij formula
+    n_ij = len(common_neighbors)
+    k_i = graph.degree(i)
+    k_j = graph.degree(j)
+    
+    denominator = (k_i - 1) + (k_j - 1) - n_ij
+
+    return n_ij / denominator
+    
+def compute_tie_strength(graph, SE):
+    """
+    Compute and return the tie activation probability matrix T for the given graph,
+    based on structural embeddedness (SE).
+    
+    For each pair of nodes (i,j) that are connected in the graph:
+      T_ij = SE * O_ij + (1 - SE)
+    For nodes not connected, we set T_ij = 0 (since their tie is never active).
+    
+    Parameters:
+      - graph: a NetworkX graph (static)
+      - SE (float): the structural embeddedness parameter, 0 <= SE <= 1.
+         SE = 0 recovers the original model (all ties active with probability 1),
+         SE = 1 means activation depends fully on topological overlap.
+    
+    Returns:
+      - T (np.ndarray): A (N x N) matrix where T[i,j] is the tie activation probability.
+    """
+    N = graph.number_of_nodes()
+    T = np.zeros((N, N))            # initialize the tie activation probability matrix
+    
+    nodes = list(graph.nodes())
+    for i in nodes:
+        for j in nodes:
+            if (i != j) and (graph.has_edge(i, j)):
+                O_ij = compute_topological_overlap(graph, i, j)
+                T[i, j] = SE * O_ij + (1 - SE)
+            # For non-neighbors T[i,j] remains 0 (what we initialize it to)
+    return T
 
 ### PLOTTING
 
@@ -392,4 +624,3 @@ def caveman_layout_positions(G, group_spacing=6, node_spacing=1.5, seed=42):
                          centroid_y + radius * np.sin(angle))
 
     return pos
-
