@@ -438,7 +438,7 @@ def compute_polarization(S):
 
     # Polarization is the variance of these distances.
     # P_t = np.mean((distances - mean_distance) ** 2)
-    P_t = np.sum((distances - mean_distance) ** 2) / (N * (N - 1))
+    P_t = 2 * np.sum((distances - mean_distance) ** 2) / (N * (N - 1))
 
     return P_t
 
@@ -488,7 +488,10 @@ def compute_topological_overlap(graph, i, j):
     
     denominator = (k_i - 1) + (k_j - 1) - n_ij
 
-    return n_ij / denominator
+    if denominator > 0:
+        return n_ij / denominator
+    else:
+        return 0.0
     
 def compute_tie_strength(graph, SE):
     """
