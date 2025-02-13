@@ -106,7 +106,6 @@ def initialize_opinions_Lee(N, K, NS, cave_size):
         for k in range(K):
             if k < H:
                 # Segregated dimension: assign based on group membership.
-                print(f"Segregated dimension: {k}")
                 if group == 0:
                     S[i, k] = np.random.uniform(-1, 0)
                 else:
@@ -114,7 +113,6 @@ def initialize_opinions_Lee(N, K, NS, cave_size):
             else:
                 # Non-segregated dimension: assign uniformly from [-1, 1].
                 S[i, k] = np.random.uniform(-1, 1)
-                print(f"Non-segregated dimension: {k}")
     
     return S
 
