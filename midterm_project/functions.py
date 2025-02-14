@@ -19,7 +19,7 @@ def initialize_network(num_caves, cave_size, add_random_ties, p_random):
       - p_random: probability for adding a random tie between any pair of agents
       
     Returns:
-      - G: a NetworkX graph object with the caveman structure (and random ties if requested)
+      - G: a NetworkX graph object with the caveman structure
     """
 
     # NOTE: we can also simply use nx.connected_caveman_graph(num_caves, cave_size), which would create a 
@@ -523,23 +523,12 @@ def compute_tie_strength(graph, SE):
             # For non-neighbors T[i,j] remains 0 (what we initialize it to)
     return T
 
-### PLOTTING
+
+### PLOTTING (not used, please ignore)
 
 def caveman_layout(G, spacing=3):
-    """
-    Generates a position dictionary for a connected caveman graph 
-    where nodes in the same fully connected group are placed together.
 
-    Parameters:
-    - G: networkx.Graph
-        The connected caveman graph.
-    - spacing: float, optional (default=3)
-        The horizontal spacing between groups.
-
-    Returns:
-    - pos: dict
-        A dictionary mapping nodes to positions.
-    """
+    ## an attempt to plot the caveman graph in a nice way....
     
     # Detect groups (fully connected cliques)
     groups = list(community.label_propagation_communities(G))
@@ -562,26 +551,9 @@ def caveman_layout(G, spacing=3):
     return pos, groups
 
 def caveman_layout_positions(G, group_spacing=6, node_spacing=1.5, seed=42):
-    """
-    Generates a structured layout for a connected caveman network, ensuring that:
-    1. Groups remain visually separate but connected.
-    2. Groups with strong interconnections stay closer.
-    3. Nodes within each group are arranged neatly around a centroid.
 
-    Parameters:
-    - G: networkx.Graph
-        The connected caveman graph.
-    - group_spacing: float, optional (default=6)
-        Distance between different groups in the layout.
-    - node_spacing: float, optional (default=1.5)
-        Distance of nodes around their group centroid.
-    - seed: int, optional (default=42)
-        Random seed for reproducibility.
+    ## another attempt to plot the caveman graph in a nice way....
 
-    Returns:
-    - pos: dict
-        A dictionary mapping nodes to positions.
-    """
     np.random.seed(seed)  # Ensure reproducibility
     pos = {}  # Dictionary to store node positions
 
