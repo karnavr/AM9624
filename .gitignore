@@ -172,3 +172,11 @@ cython_debug/
 
 # pickle files
 *.pkl
+
+# data files
+*.gz
+*.tar
+*.zip
+*.pth
+
+*/data
